@@ -1,0 +1,22 @@
+version: 0.1
+timestamp: 20260408
+collect_place: studio
+episode: 요리하는 날
+name: 김치찌개 만들기
+task: 재료 준비 및 조리
+sub_task:
+  - name: 재료 손질
+    prompt: 돼지고기와 김치를 적당한 크기로 자른다
+  - name: 냄비에 볶기
+    prompt: 고기와 김치를 먼저 볶는다
+  - name: 물 넣고 끓이기
+    prompt: 물을 넣고 중불에서 끓인다
+tags:
+  - 요리
+  - 한식
+  - 김치찌개
+worker:
+  - id: worker_01
+  - gender: female
+  - height: 165
+  - main_hand: right

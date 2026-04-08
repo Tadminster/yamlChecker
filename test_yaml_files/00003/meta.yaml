@@ -1,0 +1,23 @@
+version: 0.1
+timestamp: 99999999
+collect_place: large_test
+episode: 무언가 문제가 있는 데이터
+name: ''
+task: '문제야 문제 '
+sub_task:
+  - name: 가가 가가
+    prompt: 나나나나. 
+  - name: 다다다다
+    prompt: 라라라라라라라라
+  - name: 라라라라라라라라.
+    prompt: 마마마
+  - name: ' 사 사 '
+    prompt: 
+  - name: ''
+    prompt: 
+tags:
+worker:
+  - id: worker_bulk
+  - gender: male
+  - height: 180
+  - main_hand: right

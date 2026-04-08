@@ -1,0 +1,24 @@
+version: 0.1
+timestamp: 17171771
+collect_place: my home
+episode: 지금부터 애국가를 불러보겠습니다
+name: 애국가 시작~
+task: 하나 둘 셋 넷
+sub_task: 
+  - name: 동해물과 백두산이 마르고 닳도록
+    prompt: 하느님이 보우하사 우리 나라 만세
+  - name: ''
+    prompt: 
+  - name: 무궁화 삼천리 화려강산
+    prompt: 대한 사람 대한으로 우리 나라 만세
+  - name: 어쩌고 저쩌고
+    prompt: '뭔가 문제가 있는 문장 '
+tags:
+  - 애국가
+  - 태극기
+  - 만세
+worker:
+  - id: worker_00
+  - gender: male
+  - height: 170
+  - main_hand: right
