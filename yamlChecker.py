@@ -215,6 +215,10 @@ class SearchOptionsDialog(QDialog):
 # ==================================================
 def is_problem_line(line: str, key: str) -> bool:
 
+    # 태그 탭은 따로 검사하지 않음
+    if key == "tags":
+        return False
+
     # ':' 기준 분리
     parts = line.split(":", 1)
 
@@ -257,6 +261,10 @@ def is_problem_line(line: str, key: str) -> bool:
             return True
 
     elif key == "prompt":
+        # 손 포함 여부 검사
+        if not any(hand in value_part for hand in ["왼손", "오른손", "양손"]):
+            return True
+        
         # 문장 끝 온점 검사
         if not value_part.endswith("."):
             return True
@@ -469,13 +477,49 @@ class App(QWidget):
 
                 try:
                     with open(path, "r", encoding="utf-8") as file:
+                        collecting_tags = False
+                        tag_block = []
+
                         for line in file:
                             line = line.rstrip("\n")
 
+                            # --------------------------
+                            # tags
+                            # --------------------------
+                            # tag 블록 시작
+                            if re.match(r'^\s*tags\s*:', line):
+                                collecting_tags = True
+                                tag_block = [line]
+                                continue
+                            
+                            # tag 수집
+                            if collecting_tags:
+                                # 다음 key 나오면 종료
+                                if re.match(r'^\s*\w+\s*:', line):
+                                    results_default["tags"].append((path, "\n".join(tag_block)))
+                                    collecting_tags = False
+                                    tag_block = []
+                                    continue
+
+                                # 계속 수집
+                                tag_block.append(line)
+                                continue
+
+                            # --------------------------
+                            # 기존 key 처리
+                            # --------------------------
                             for key in self.default_keys:
-                                if key in line:
-                                    results_default[key].append((path, line))
-                                    break
+                                if key == "tags":
+                                    continue  # tags는 따로 처리
+
+                                if key == "task":
+                                    if re.match(r'^\s*task\s*:', line):
+                                        results_default[key].append((path, line))
+                                        break
+                                else:
+                                    if key in line:
+                                        results_default[key].append((path, line))
+                                        break
 
                             if user_query:
                                 if use_regex:
