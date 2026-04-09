@@ -381,12 +381,13 @@ class App(QWidget):
         top = QHBoxLayout()
         self.path_input = QLineEdit()
 
-        btn = QPushButton("📁")
-        btn.clicked.connect(self.select_folder)
+        btn_select_folder  = QPushButton("📁")
+        btn_select_folder.setToolTip("루트 폴더를 선택합니다.")
+        btn_select_folder .clicked.connect(self.select_folder)
 
         top.addWidget(QLabel("루트 경로"))
         top.addWidget(self.path_input)
-        top.addWidget(btn)
+        top.addWidget(btn_select_folder)
 
         layout.addLayout(top)
 
@@ -394,16 +395,18 @@ class App(QWidget):
         search = QHBoxLayout()
         self.key_input = QLineEdit()
 
-        option_btn = QPushButton("⚙️")
-        option_btn.clicked.connect(self.open_search_options)
+        btn_option = QPushButton("⚙️")
+        btn_option.setToolTip("검색 옵션을 설정합니다.")  
+        btn_option.clicked.connect(self.open_search_options)
 
-        run_btn = QPushButton("🔎")
-        run_btn.clicked.connect(self.run_scan)
+        btn_search = QPushButton("🔎")
+        btn_search.setToolTip("현재 경로에서 YAML 파일을 검색합니다.")
+        btn_search.clicked.connect(self.run_scan)
 
         search.addWidget(QLabel("검색"))
         search.addWidget(self.key_input)
-        search.addWidget(option_btn)
-        search.addWidget(run_btn)
+        search.addWidget(btn_search)
+        search.addWidget(btn_option)
 
         layout.addLayout(search)
 
@@ -671,8 +674,19 @@ if __name__ == "__main__":
     palette.setColor(QPalette.Highlight, QColor("#0078d7"))
     palette.setColor(QPalette.HighlightedText, Qt.white)
 
-
     app.setPalette(palette)
+
+     # Tooltip 스타일
+    app.setStyleSheet("""
+        QToolTip {
+            background-color: #FFFFFF;
+            color: #1A1A1A;
+            border: 1px solid #A8D0F0;
+            border-radius: 6px;
+            padding: 3px 5px;
+            font-size: 12px;
+        }
+    """)
 
     w = App()
     w.show()
