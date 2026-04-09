@@ -172,10 +172,10 @@ class SearchOptionsDialog(QDialog):
         # -----------------------------
         btn_layout = QHBoxLayout()
 
-        btn_ok = QPushButton("OK")
+        btn_ok = QPushButton("적용")
         btn_ok.clicked.connect(self.accept)
 
-        btn_cancel = QPushButton("Cancel")
+        btn_cancel = QPushButton("취소")
         btn_cancel.clicked.connect(self.reject)
 
         btn_layout.addWidget(btn_ok)
@@ -213,25 +213,92 @@ class SearchOptionsDialog(QDialog):
 # ==================================================
 # 문제 라인 검사 함수
 # ==================================================
-def is_problem_line(line: str):
+def is_problem_line(line: str, key: str) -> bool:
 
-    if ":" not in line:
-        return False
-
+    # ':' 기준 분리
     parts = line.split(":", 1)
-    value = parts[1].strip()
 
-    return value == "" or value == "''"
+    # ':' 이후 공백이면 문제로 판단
+    if len(parts) < 2:
+        return True
+
+    # 공백제거
+    value_part = parts[1].strip()
+    # ':' 가 없는 라인인제 체크
+    if not value_part:
+        return True
+
+    # ---------------------------
+    # 공통 검사
+    # ---------------------------
+
+    # 첫번째 글자만 가져와서
+    first_char = value_part[0]
+
+    # 영어/숫자/한글 시작인지 검사
+    if not re.match(r'[a-zA-Z0-9가-힣]', first_char):
+        return True
+
+    # ---------------------------
+    # key별 추가 검사
+    # ---------------------------
+    # 버전은 무조건 0.2
+    if key == "version":
+        if value_part != "0.2":
+            return True
+    
+    # 타임스탬프는 숫자만 허용
+    elif key == "timestamp":
+        if not value_part.isdigit():
+            return True
+
+        # 정확히 13자리만 허용
+        if len(value_part) != 13:
+            return True
+
+    elif key == "prompt":
+        # 문장 끝 온점 검사
+        if not value_part.endswith("."):
+            return True
+    
+    # ID는 worker_숫자3자리만 허용
+    elif key == "id":
+        if not re.match(r'^worker_\d{3}$', value_part):
+            return True
+
+    # 설명은 male, female
+    elif key == "gender":
+        if value_part not in ("male", "female"):
+            return True
+
+    # 키는 1200 ~ 2200
+    elif key == "height":
+        if not value_part.isdigit():
+            return True
+
+        height = int(value_part)
+
+        if height < 1200 or height > 2200:
+            return True
+
+    # 손은 left / right
+    elif key == "main_hand":
+        if value_part not in ("left", "right"):
+            return True
+
+    # 정상 문장
+    return False
 
 
 # ==================================================
 # 하이라이터
 # ==================================================
 class ResultHighlighter(QSyntaxHighlighter):
-    def __init__(self, document, app_instance, current_query=""):
+    def __init__(self, document, app_instance, current_query="", current_key=""):
         super().__init__(document)
         self.app = app_instance
         self.current_query = current_query.strip()
+        self.current_key = current_key
 
     def highlightBlock(self, text):
         if not text:
@@ -246,7 +313,7 @@ class ResultHighlighter(QSyntaxHighlighter):
         # 문제 라인 검사 (우선 적용)
         content = text[first_space + 1:] if first_space > 0 else text
 
-        if is_problem_line(content):
+        if is_problem_line(content, self.current_key):
             self.setFormat(
                 first_space + 1 if first_space > 0 else 0,
                 len(content),
@@ -286,7 +353,7 @@ class App(QWidget):
         self.options_file = "search_options.json"
         self.last_search_options = {
             "depth": 3,
-            "hide_filename": False,
+            "hide_filename": True,
             "use_regex": False
         }
 
@@ -349,7 +416,7 @@ class App(QWidget):
             "collect_place", "collect_place_description",
             "collect_device", "zed_serial", "scenario",
             "task", "name", "prompt", "hand_visible",
-            "tags", "worker"
+            "tags", "id", "gender", "height", "main_hand"
         ]
 
     # ==================================================
@@ -457,7 +524,8 @@ class App(QWidget):
         text._highlighter = ResultHighlighter(
             text.document(),
             self,
-            current_query=current_query
+            current_query=current_query,
+            current_key=title
         )
 
         text.mouseDoubleClickEvent = lambda e, t=text: self.open_from_click(e, t)
