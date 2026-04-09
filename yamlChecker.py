@@ -1,21 +1,23 @@
 import os
 import sys
-import yaml
 import platform
 import subprocess
 import re
 import json
 
 from pathlib import Path 
+
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QPlainTextEdit, QLineEdit, QLabel,
     QFileDialog, QTabWidget, QSpinBox,
     QDialog, QCheckBox, QFrame
 )
+
 from PySide6.QtGui import (
     QColor, QTextCharFormat, QFont, QPalette, QSyntaxHighlighter
 )
+
 from PySide6.QtCore import Qt
 
 
@@ -51,6 +53,21 @@ def shorten_path(path, root=None, depth=4):
 
 
 # ==================================================
+# 파일명 제거 옵션
+# ==================================================
+def process_path_display(path, root, depth, hide_filename):
+    path = path.replace("\\", "/")
+
+    if hide_filename:
+        if "/" in path:
+            path = path.rsplit("/", 1)[0]
+
+    short = shorten_path(path, root, depth)
+
+    return short
+
+
+# ==================================================
 # 파일 열기
 # ==================================================
 def open_file(path):
@@ -66,153 +83,20 @@ def open_file(path):
 
 
 # ==================================================
-# YAML 로드
-# ==================================================
-def load_yaml(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return yaml.safe_load(f), None
-    except Exception as e:
-        return None, str(e)
-
-
-# ==================================================
-# 검색 조건 생성기
-# ==================================================
-def build_match_function(query: str):
-    query = query.strip()
-
-    if " OR " in query:
-        tokens = [t.strip().lower() for t in query.split(" OR ") if t.strip()]
-
-        return lambda k, v: any(
-            token in str(k).lower() or token in str(v).lower()
-            for token in tokens
-        )
-
-    tokens = [t.strip().lower() for t in query.split() if t.strip()]
-
-    return lambda k, v: all(
-        token in str(k).lower() or token in str(v).lower()
-        for token in tokens
-    )
-
-
-def build_key_highlight_function(query: str):
-    query = query.strip()
-
-    if not query:
-        return lambda key_text: False
-
-    if " OR " in query:
-        tokens = [t.strip().lower() for t in query.split(" OR ") if t.strip()]
-
-        return lambda key_text: any(
-            token in str(key_text).lower()
-            for token in tokens
-        )
-
-    tokens = [t.strip().lower() for t in query.split() if t.strip()]
-
-    return lambda key_text: all(
-        token in str(key_text).lower()
-        for token in tokens
-    )
-
-
-# ==================================================
-# 사용자 입력 query 파싱
-# ==================================================
-def parse_user_queries(text: str):
-    raw_queries = [q.strip() for q in text.split(",") if q.strip()]
-
-    unique_queries = []
-    seen = set()
-
-    for q in raw_queries:
-        if q not in seen:
-            seen.add(q)
-            unique_queries.append(q)
-
-    return unique_queries
-
-
-# ==================================================
-# 결과 하이라이터
-# ==================================================
-class ResultHighlighter(QSyntaxHighlighter):
-    def __init__(self, document, app_instance, current_query=""):
-        super().__init__(document)
-        self.app = app_instance
-        self.current_query = current_query.strip()
-        self.key_matcher = build_key_highlight_function(self.current_query)
-
-    def highlightBlock(self, text):
-        if not text:
-            return
-
-        first_space = text.find(" ")
-
-        if first_space > 0:
-            folder_end = first_space
-            content_start = first_space + 1
-
-            self.setFormat(0, folder_end, self.app.format_path())
-            self.setFormat(content_start, len(text) - content_start, self.app.format_value())
-        else:
-            content_start = 0
-            self.setFormat(0, len(text), self.app.format_value())
-
-        if first_space > 0 and ":" in text:
-            remain = text[content_start:]
-            colon_index = remain.find(":")
-
-            if colon_index >= 0:
-                key = remain[:colon_index].strip()
-
-                if key in self.app.default_keys:
-                    value = remain[colon_index + 1:].strip()
-
-                    if value == "" or value == "''":
-                        self.setFormat(
-                            content_start,
-                            len(text) - content_start,
-                            self.app.format_empty()
-                        )
-                        return
-
-        if not self.current_query:
-            return
-
-        query = self.current_query.lower()
-        lower_text = text.lower()
-
-        start = content_start
-
-        while True:
-            idx = lower_text.find(query, start)
-            if idx == -1:
-                break
-
-            length = len(query)
-            self.setFormat(idx, length, self.app.format_key())
-            start = idx + length
-
-
-# ==================================================
 # 검색 옵션 다이얼로그
 # ==================================================
 class SearchOptionsDialog(QDialog):
     def __init__(self, parent=None, init_options=None):
         super().__init__(parent)
 
+        # None 방지용
+        init_options = init_options or {}
+
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
 
         layout = QVBoxLayout()
 
-        # -----------------------------
         # 타이틀 바
-        # -----------------------------
         title_layout = QVBoxLayout()
 
         title_label = QLabel("검색 옵션")
@@ -227,36 +111,55 @@ class SearchOptionsDialog(QDialog):
 
         layout.addLayout(title_layout)
 
-        # Depth
+        # Depth 옵션
         depth_layout = QHBoxLayout()
         depth_label = QLabel("경로 표시 깊이")
 
         self.depth_spin = QSpinBox()
         self.depth_spin.setMinimum(1)
         self.depth_spin.setMaximum(10)
-
-        default_depth = init_options.get("depth", 3) if init_options else 3
-        self.depth_spin.setValue(default_depth)
+        self.depth_spin.setValue(init_options.get("depth", 3))
 
         depth_layout.addWidget(depth_label)
         depth_layout.addStretch()
         depth_layout.addWidget(self.depth_spin)
+
         layout.addLayout(depth_layout)
 
-        # Regex
+        # 파일명 숨김 옵션
+        hide_file_layout = QHBoxLayout()
+
+        hide_file_label = QLabel("파일명 숨김")
+        self.hide_file_checkbox = QCheckBox()
+        self.hide_file_checkbox.setChecked(init_options.get("hide_filename", False))
+
+        def on_hide_label_click(event):
+            self.hide_file_checkbox.toggle()
+            QLabel.mousePressEvent(hide_file_label, event)
+
+        hide_file_label.mousePressEvent = on_hide_label_click
+
+        hide_file_layout.addWidget(hide_file_label)
+        hide_file_layout.addStretch()
+        hide_file_layout.addWidget(self.hide_file_checkbox)
+
+        layout.addLayout(hide_file_layout)
+
+        # Regex 옵션
         regex_layout = QHBoxLayout()
 
         regex_label = QLabel("정규식 사용")
         self.regex_checkbox = QCheckBox()
+        self.regex_checkbox.setChecked(init_options.get("use_regex", False))
 
-        default_regex = init_options.get("use_regex", False) if init_options else False
-        self.regex_checkbox.setChecked(default_regex)
-
+        # -----------------------------
         # 라벨 클릭 이벤트
-        regex_label.mousePressEvent = lambda e: (
-            self.regex_checkbox.toggle(),
-            QLabel.mousePressEvent(regex_label, e)
-        )
+        # -----------------------------
+        def on_label_click(event):
+            self.regex_checkbox.toggle()
+            QLabel.mousePressEvent(regex_label, event)
+
+        regex_label.mousePressEvent = on_label_click
 
         regex_layout.addWidget(regex_label)
         regex_layout.addStretch()
@@ -264,7 +167,9 @@ class SearchOptionsDialog(QDialog):
 
         layout.addLayout(regex_layout)
 
+        # -----------------------------
         # 버튼
+        # -----------------------------
         btn_layout = QHBoxLayout()
 
         btn_ok = QPushButton("OK")
@@ -281,12 +186,16 @@ class SearchOptionsDialog(QDialog):
 
         self.setLayout(layout)
 
+    # -----------------------------
+    # 옵션 반환
+    # -----------------------------
     def get_options(self):
         return {
             "depth": self.depth_spin.value(),
+            "hide_filename": self.hide_file_checkbox.isChecked(),
             "use_regex": self.regex_checkbox.isChecked()
         }
-    
+
     # -----------------------------
     # 모달 창 드래그 기능
     # -----------------------------
@@ -302,6 +211,67 @@ class SearchOptionsDialog(QDialog):
 
 
 # ==================================================
+# 문제 라인 검사 함수
+# ==================================================
+def is_problem_line(line: str):
+
+    if ":" not in line:
+        return False
+
+    parts = line.split(":", 1)
+    value = parts[1].strip()
+
+    return value == "" or value == "''"
+
+
+# ==================================================
+# 하이라이터
+# ==================================================
+class ResultHighlighter(QSyntaxHighlighter):
+    def __init__(self, document, app_instance, current_query=""):
+        super().__init__(document)
+        self.app = app_instance
+        self.current_query = current_query.strip()
+
+    def highlightBlock(self, text):
+        if not text:
+            return
+
+        first_space = text.find(" ")
+
+        if first_space > 0:
+            self.setFormat(0, first_space, self.app.format_path())
+            self.setFormat(first_space + 1, len(text), self.app.format_value())
+
+        # 문제 라인 검사 (우선 적용)
+        content = text[first_space + 1:] if first_space > 0 else text
+
+        if is_problem_line(content):
+            self.setFormat(
+                first_space + 1 if first_space > 0 else 0,
+                len(content),
+                self.app.format_empty()
+            )
+            return
+
+        # 검색어 하이라이트
+        if not self.current_query:
+            return
+
+        lower = text.lower()
+        q = self.current_query.lower()
+
+        start = 0
+        while True:
+            idx = lower.find(q, start)
+            if idx == -1:
+                break
+
+            self.setFormat(idx, len(q), self.app.format_key())
+            start = idx + len(q)
+
+
+# ==================================================
 # 메인 UI
 # ==================================================
 class App(QWidget):
@@ -313,13 +283,10 @@ class App(QWidget):
 
         self.line_maps = {}
 
-        # -------------------------
-        # 옵션 저장
-        # -------------------------
         self.options_file = "search_options.json"
-
         self.last_search_options = {
             "depth": 3,
+            "hide_filename": False,
             "use_regex": False
         }
 
@@ -327,50 +294,37 @@ class App(QWidget):
 
         layout = QVBoxLayout()
 
-        # -------------------------
-        # 경로 입력
-        # -------------------------
+        # 경로
         top = QHBoxLayout()
-
-        path_label = QLabel("루트 경로")
-        top.addWidget(path_label)
-
         self.path_input = QLineEdit()
-        top.addWidget(self.path_input)
 
-        browse_btn = QPushButton("📁")
-        browse_btn.clicked.connect(self.select_folder)
-        top.addWidget(browse_btn)
+        btn = QPushButton("📁")
+        btn.clicked.connect(self.select_folder)
+
+        top.addWidget(QLabel("루트 경로"))
+        top.addWidget(self.path_input)
+        top.addWidget(btn)
 
         layout.addLayout(top)
 
-        # -------------------------
-        # 검색 영역
-        # -------------------------
-        search_layout = QHBoxLayout()
-
-        search_label = QLabel("추가 검색")
-        search_layout.addWidget(search_label)
-
+        # 검색
+        search = QHBoxLayout()
         self.key_input = QLineEdit()
-        self.key_input.setPlaceholderText("추가 key 입력 (콤마 구분)")
-        search_layout.addWidget(self.key_input)
 
-        # 옵션 버튼
-        search_option_btn = QPushButton("⚙️")
-        search_option_btn.clicked.connect(self.open_search_options)
-        search_layout.addWidget(search_option_btn)
+        option_btn = QPushButton("⚙️")
+        option_btn.clicked.connect(self.open_search_options)
 
-        # 검색 버튼
-        search_btn = QPushButton("🔎")
-        search_btn.clicked.connect(self.run_scan)
-        search_layout.addWidget(search_btn)
+        run_btn = QPushButton("🔎")
+        run_btn.clicked.connect(self.run_scan)
 
-        layout.addLayout(search_layout)
+        search.addWidget(QLabel("검색"))
+        search.addWidget(self.key_input)
+        search.addWidget(option_btn)
+        search.addWidget(run_btn)
 
-        # -------------------------
-        # 결과 탭
-        # -------------------------
+        layout.addLayout(search)
+
+        # 탭 스타일 유지
         self.tabs = QTabWidget()
         self.tabs.setStyleSheet("""
         QTabBar::tab {
@@ -384,19 +338,12 @@ class App(QWidget):
             background: #e6f0ff;
             color: #0004ff;
             font-weight: bold;
-            border: 1px solid #c0d4ff;
-            border-bottom: none;
-        }
-
-        QTabBar::tab:hover {
-            background: #f5f5f5;
         }
         """)
 
         layout.addWidget(self.tabs)
         self.setLayout(layout)
 
-        # 기본 key
         self.default_keys = [
             "version", "timestamp", "episode_name", "domain",
             "collect_place", "collect_place_description",
@@ -405,165 +352,116 @@ class App(QWidget):
             "tags", "worker"
         ]
 
-        self.default_key_set = set(self.default_keys)
-
     # ==================================================
-    # 옵션 저장
+    # 옵션
     # ==================================================
     def save_options(self):
-        try:
-            with open(self.options_file, "w", encoding="utf-8") as f:
-                json.dump(self.last_search_options, f, indent=4)
-        except Exception as e:
-            print("옵션 저장 실패:", e)
+        with open(self.options_file, "w", encoding="utf-8") as f:
+            json.dump(self.last_search_options, f)
 
-    # ==================================================
-    # 옵션 로드
-    # ==================================================
     def load_options(self):
-        try:
-            if os.path.exists(self.options_file):
-                with open(self.options_file, "r", encoding="utf-8") as f:
-                    loaded_options = json.load(f)
+        if os.path.exists(self.options_file):
+            with open(self.options_file, "r", encoding="utf-8") as f:
+                self.last_search_options.update(json.load(f))
 
-                    self.last_search_options["depth"] = loaded_options.get("depth", 3)
-                    self.last_search_options["use_regex"] = loaded_options.get("use_regex", False)
-        except Exception as e:
-            print("옵션 로드 실패:", e)
-
-    # ==================================================
-    # 옵션창
-    # ==================================================
     def open_search_options(self):
         dialog = SearchOptionsDialog(self, self.last_search_options)
-
-        if dialog.exec() == QDialog.Accepted:
+        if dialog.exec():
             self.last_search_options = dialog.get_options()
             self.save_options()
-            self.run_scan(self.last_search_options)
+            self.run_scan()
 
-    # ==================================================
-    # 폴더 선택
-    # ==================================================
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self)
         if folder:
             self.path_input.setText(folder)
 
     # ==================================================
-    # 스캔
+    # grep 검색 유지
     # ==================================================
-    def run_scan(self, options=None):
+    def run_scan(self):
         root = self.path_input.text().strip()
         if not os.path.isdir(root):
             return
 
-        options = options or self.last_search_options
-        use_regex = options.get("use_regex", False)
-
         self.tabs.clear()
         self.line_maps.clear()
 
-        user_queries = parse_user_queries(self.key_input.text().strip())
-        queries = user_queries + [k for k in self.default_keys if k not in user_queries]
+        user_query = self.key_input.text().strip()
+        use_regex = self.last_search_options["use_regex"]
 
-        if not queries:
-            return
-
-        matchers = {}
-
-        for q in queries:
-            if use_regex:
-                try:
-                    regex = re.compile(q, re.IGNORECASE)
-                    matchers[q] = lambda k, v, r=regex: bool(r.search(str(k)) or r.search(str(v)))
-                except Exception:
-                    matchers[q] = lambda k, v: False
-            else:
-                matchers[q] = build_match_function(q)
-
-        results = {q: [] for q in queries}
+        results_default = {k: [] for k in self.default_keys}
+        results_user = []
 
         for r, _, files in os.walk(root):
             for f in files:
                 if not f.endswith(".yaml"):
                     continue
 
-                full = os.path.join(r, f)
-                data, err = load_yaml(full)
+                path = os.path.join(r, f)
 
-                if err or not isinstance(data, dict):
+                try:
+                    with open(path, "r", encoding="utf-8") as file:
+                        for line in file:
+                            line = line.rstrip("\n")
+
+                            for key in self.default_keys:
+                                if key in line:
+                                    results_default[key].append((path, line))
+                                    break
+
+                            if user_query:
+                                if use_regex:
+                                    try:
+                                        if re.search(user_query, line):
+                                            results_user.append((path, line))
+                                    except:
+                                        pass
+                                else:
+                                    if user_query in line:
+                                        results_user.append((path, line))
+
+                except:
                     continue
 
-                for data_key, value in data.items():
-                    for q in queries:
-                        if matchers[q](data_key, value):
-                            entry = (full, data_key, value)
+        # 유저 쿼리 탭 우선 생성
+        if user_query:
+            self.add_tab(user_query, results_user, user_query)
 
-                            if entry not in results[q]:
-                                results[q].append(entry)
+        for key, data in results_default.items():
+            if key == user_query:
+                continue  # 중복 방지
+            if data:
+                self.add_tab(key, data, key)
 
-        for q in queries:
-            self.add_tab(q, [q], results, current_query=q)
-
-    # ==================================================
-    # 탭 생성
-    # ==================================================
-    def add_tab(self, title, queries, results, current_query=""):
+    def add_tab(self, title, data, current_query):
         text = QPlainTextEdit()
         text.setReadOnly(True)
         text.setFont(QFont("Consolas", 11))
-        text.setStyleSheet("""
-        QPlainTextEdit {
-            padding: 6px;
-        }
-        """)
 
         self.tabs.addTab(text, title)
-
-        # 라인 → 파일 경로 매핑
         self.line_maps[text] = {}
 
         lines = []
-        line_index = 0
-
         root = self.path_input.text().strip()
-        depth = self.last_search_options.get("depth", 3)
+        depth = self.last_search_options["depth"]
 
-        for q in queries:
-            for path, real_key, value in results[q]:
-
-                if value is None:
-                    display = f"{real_key}:"
-                elif isinstance(value, str) and value.strip() == "":
-                    display = f"{real_key}: ''"
-                else:
-                    display = f"{real_key}: {value}"
-
-                short_path = shorten_path(path, root=root, depth=depth)
-
-                line = f"{short_path} {display}"
-                lines.append(line)
-
-                self.line_maps[text][line_index] = path
-                line_index += 1
+        for i, (path, line) in enumerate(data):
+            hide_filename = self.last_search_options.get("hide_filename", False)
+            short = process_path_display(path, root, depth, hide_filename)
+            lines.append(f"{short} {line}")
+            self.line_maps[text][i] = path
 
         text.setPlainText("\n".join(lines))
 
-        # 현재 탭 query 전달
-        highlighter = ResultHighlighter(
+        text._highlighter = ResultHighlighter(
             text.document(),
             self,
             current_query=current_query
         )
-        text._highlighter = highlighter
 
-        # 더블클릭 이벤트 연결
         text.mouseDoubleClickEvent = lambda e, t=text: self.open_from_click(e, t)
 
-    # ==================================================
-    # 더블클릭 시 파일 열기
-    # ==================================================
     def open_from_click(self, event, text):
         cursor = text.cursorForPosition(event.position().toPoint())
         line = cursor.blockNumber()
@@ -572,7 +470,7 @@ class App(QWidget):
             open_file(self.line_maps[text][line])
 
     # ==================================================
-    # 스타일 정의
+    # 스타일
     # ==================================================
     def format_key(self):
         f = QTextCharFormat()
@@ -598,7 +496,7 @@ class App(QWidget):
 
 
 # ==================================================
-# 메인
+# 실행
 # ==================================================
 if __name__ == "__main__":
     app = QApplication(sys.argv)
@@ -614,6 +512,7 @@ if __name__ == "__main__":
     palette.setColor(QPalette.ButtonText, Qt.black)
     palette.setColor(QPalette.Highlight, QColor("#0078d7"))
     palette.setColor(QPalette.HighlightedText, Qt.white)
+
 
     app.setPalette(palette)
 
