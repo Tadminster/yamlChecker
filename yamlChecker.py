@@ -460,7 +460,7 @@ class App(QWidget):
             if dialog.exec():
                 self.last_search_options = dialog.get_options()
                 self.save_options()
-                self.run_scan()
+                # self.run_scan()
         finally:
             self.clear_dim_style()
 
