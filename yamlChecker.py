@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QPlainTextEdit, QLineEdit, QLabel,
     QFileDialog, QTabWidget, QSpinBox,
-    QDialog, QCheckBox, QFrame
+    QDialog, QCheckBox, QFrame, QMessageBox
 )
 
 from PySide6.QtGui import (
@@ -346,6 +346,7 @@ class ResultHighlighter(QSyntaxHighlighter):
             start = idx + len(q)
 
 
+
 # ==================================================
 # 메인 UI
 # ==================================================
@@ -367,6 +368,13 @@ class App(QWidget):
 
         self.load_options()
 
+        # 루트 레이아웃
+        root_layout = QVBoxLayout()
+
+        # 메인 UI 컨테이너
+        self.content_widget = QWidget()
+
+        # 기존 layout
         layout = QVBoxLayout()
 
         # 경로
@@ -417,7 +425,9 @@ class App(QWidget):
         """)
 
         layout.addWidget(self.tabs)
-        self.setLayout(layout)
+        self.content_widget.setLayout(layout)
+        root_layout.addWidget(self.content_widget)
+        self.setLayout(root_layout)
 
         self.default_keys = [
             "version", "timestamp", "episode_name", "domain",
@@ -426,6 +436,8 @@ class App(QWidget):
             "task", "name", "prompt", "hand_visible",
             "tags", "id", "gender", "height", "main_hand"
         ]
+
+        self._original_style = ""
 
     # ==================================================
     # 옵션
@@ -440,11 +452,17 @@ class App(QWidget):
                 self.last_search_options.update(json.load(f))
 
     def open_search_options(self):
+        self.apply_dim_style() 
+
         dialog = SearchOptionsDialog(self, self.last_search_options)
-        if dialog.exec():
-            self.last_search_options = dialog.get_options()
-            self.save_options()
-            self.run_scan()
+
+        try:
+            if dialog.exec():
+                self.last_search_options = dialog.get_options()
+                self.save_options()
+                self.run_scan()
+        finally:
+            self.clear_dim_style()
 
     def select_folder(self):
         folder = QFileDialog.getExistingDirectory(self)
@@ -456,7 +474,20 @@ class App(QWidget):
     # ==================================================
     def run_scan(self):
         root = self.path_input.text().strip()
+        if not root:
+            QMessageBox.warning(
+                self,
+                "경로 없음",
+                "먼저 루트 경로를 선택해주세요."
+            )
+            return
+
         if not os.path.isdir(root):
+            QMessageBox.warning(
+                self,
+                "잘못된 경로",
+                "유효한 폴더 경로를 선택해주세요."
+            )
             return
 
         self.tabs.clear()
@@ -584,6 +615,19 @@ class App(QWidget):
     # ==================================================
     # 스타일
     # ==================================================
+    def apply_dim_style(self):
+        # 기존 스타일 저장
+        if not self._original_style: #한번만 저장하기
+            self._original_style = self.content_widget.styleSheet()
+
+        # 메인창 어둡게
+        self.content_widget.setStyleSheet("background-color: #d0d0d0;")
+
+
+    def clear_dim_style(self):
+        # 원래 스타일 복구
+        self.content_widget.setStyleSheet(self._original_style)
+
     def format_key(self):
         f = QTextCharFormat()
         f.setForeground(QColor("#0004ff"))
@@ -605,6 +649,8 @@ class App(QWidget):
         f.setForeground(QColor("#ff4444"))
         f.setBackground(QColor("#FFCECE"))
         return f
+    
+
 
 
 # ==================================================
