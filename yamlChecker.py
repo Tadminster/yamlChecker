@@ -630,25 +630,58 @@ class App(QWidget):
                 self.add_tab(key, data, key)
 
     def add_tab(self, title, data, current_query):
+        # 결과 출력용 텍스트 위젯 생성
         text = QPlainTextEdit()
-        text.setReadOnly(True)
-        text.setFont(QFont("Consolas", 11))
+        text.setReadOnly(True)  # 읽기 전용
+        text.setFont(QFont("Consolas", 11))  # 고정폭 폰트
 
+        # 탭 추가
         self.tabs.addTab(text, title)
+
+        # 라인 매핑 초기화
         self.line_maps[text] = {}
 
-        lines = []
+        lines = []  # 실제 UI에 출력할 문자열 리스트
+
         root = self.path_input.text().strip()
         depth = self.last_search_options["depth"]
 
-        for i, (path, line) in enumerate(data):
-            hide_filename = self.last_search_options.get("hide_filename", False)
-            short = process_path_display(path, root, depth, hide_filename)
-            lines.append(f"{short} {line}")
-            self.line_maps[text][i] = path
+        # --------------------------
+        # 멀티라인 대응 라인 매핑
+        # --------------------------
+        display_line_index = 0  # 실제 화면 기준 라인 인덱스
 
+        for path, line in data:
+            hide_filename = self.last_search_options.get("hide_filename", False)
+
+            # 경로 축약 처리
+            short = process_path_display(path, root, depth, hide_filename)
+
+            # 멀티라인 분리
+            split_lines = line.split("\n")
+
+            for j, sub_line in enumerate(split_lines):
+
+                # 첫 줄은 경로 포함
+                if j == 0:
+                    full_line = f"{short} {sub_line}"
+                else:
+                    full_line = f"{sub_line}"
+                    # path 길이 + 공백 1칸까지 포함해서 정렬
+                    # indent = len(short) + 1
+                    # full_line = f"{' ' * indent}{sub_line}"
+
+                # 실제 출력 리스트에 추가
+                lines.append(full_line)
+
+                # 실제 표시되는 모든 라인에 path 매핑
+                self.line_maps[text][display_line_index] = path
+                display_line_index += 1  # 다음 라인으로 증가
+
+        # 텍스트 한번에 출력
         text.setPlainText("\n".join(lines))
 
+        # 하이라이터 적용
         text._highlighter = ResultHighlighter(
             text.document(),
             self,
@@ -656,6 +689,7 @@ class App(QWidget):
             current_key=title
         )
 
+        # 더블 클릭 이벤트 연결
         text.mouseDoubleClickEvent = lambda e, t=text: self.open_from_click(e, t)
 
     def open_from_click(self, event, text):
