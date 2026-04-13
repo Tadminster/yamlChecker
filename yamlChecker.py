@@ -230,7 +230,7 @@ def is_problem_line(line: str, key: str) -> bool:
     value_part = parts[1].strip()
 
     # ---------------------------
-    # 🔥 멀티라인 대응 추가
+    # 멀티라인 대응
     # ---------------------------
     # prompt 등 여러 줄일 경우 전체 value로 재구성
     if "\n" in line:
@@ -277,7 +277,7 @@ def is_problem_line(line: str, key: str) -> bool:
         if not any(hand in value_part for hand in ["왼손", "오른손", "양손"]):
             return True
         
-        # 🔥 마지막 줄 기준으로 온점 검사
+        # 마지막 줄 기준으로 온점 검사
         lines = [l.strip() for l in value_part.split("\n") if l.strip()]
 
         if not lines:
@@ -324,23 +324,82 @@ def is_problem_line(line: str, key: str) -> bool:
 class ResultHighlighter(QSyntaxHighlighter):
     def __init__(self, document, app_instance, current_query="", current_key=""):
         super().__init__(document)
-        self.app = app_instance
-        self.current_query = current_query.strip()
-        self.current_key = current_key
+        self.app = app_instance                         # App 인스턴스 (format 함수 접근용)
+        self.current_query = current_query.strip()      # 현재 검색어
+        self.current_key = current_key                  # 현재 탭 key
 
     def highlightBlock(self, text):
         if not text:
             return
 
+        # -----------------------------
+        # 경로 / 값 분리
+        # ----------------------------
         first_space = text.find(" ")
 
+        # 경로 부분 스타일
         if first_space > 0:
             self.setFormat(0, first_space, self.app.format_path())
             self.setFormat(first_space + 1, len(text), self.app.format_value())
 
-        # 문제 라인 검사 (우선 적용)
+        # 실제 검사 대상 문자열
         content = text[first_space + 1:] if first_space > 0 else text
 
+        # -----------------------------
+        # hand_visible 처리
+        # -----------------------------
+        if self.current_key == "hand_visible":
+            parts = content.split(":", 1)
+
+            if len(parts) >= 2:
+                key_name = parts[0].strip()
+                raw_value = parts[1]
+                value = raw_value.strip().lower()
+
+                content_start = first_space + 1 if first_space > 0 else 0
+
+                # key 위치 계산
+                target = "hand_visible"
+
+                # key_name 안에서 "hand_visible" 위치 찾기
+                hv_offset = key_name.find(target)
+
+                if hv_offset != -1:
+                    # content 기준 위치 계산
+                    key_offset = content.find(key_name)
+
+                    # 최종 위치 = key 시작 + hand_visible 위치
+                    hv_pos = content_start + key_offset + hv_offset
+
+                    self.setFormat(
+                        hv_pos,
+                        len(target),
+                        self.app.format_key()
+                    )
+                
+                # value 계산
+                value_offset = content.find(raw_value) + raw_value.find(value)
+                value_pos = content_start + value_offset
+
+                # value 컬러 적용
+                if value == "true":
+                    self.setFormat(
+                        value_pos, 
+                        len(value), 
+                        self.app.format_font("#2E8B57", True)
+                    )
+                elif value == "false":
+                    self.setFormat(
+                        value_pos, 
+                        len(value), 
+                        self.app.format_font("#E74C3C", True)
+                    )
+
+                return
+
+        # -----------------------------
+        # 문제 라인 검사
+        # -----------------------------
         if is_problem_line(content, self.current_key):
             self.setFormat(
                 first_space + 1 if first_space > 0 else 0,
@@ -349,7 +408,9 @@ class ResultHighlighter(QSyntaxHighlighter):
             )
             return
 
+        # -----------------------------
         # 검색어 하이라이트
+        # -----------------------------
         if not self.current_query:
             return
 
@@ -541,7 +602,14 @@ class App(QWidget):
                             line = line.rstrip("\n")
 
                             # --------------------------
-                            # prompt 블록 처리 시작
+                            # hand_visible
+                            # --------------------------
+                            if re.match(r'^\s*is_(left|right)_hand_visible\s*:', line):
+                                results_default["hand_visible"].append((path, line))
+                                continue
+
+                            # --------------------------
+                            # prompt
                             # --------------------------
                             if re.match(r'^\s*prompt\s*:', line):
                                 collecting_prompt = True
@@ -550,16 +618,20 @@ class App(QWidget):
 
                             if collecting_prompt:
                                 # 다음 key 나오면 종료
-                                if re.match(r'^\s*\w+\s*:', line):
+                                if re.match(r'^\s*(-\s*)?\w+\s*:', line):
                                     results_default["prompt"].append((path, "\n".join(prompt_block)))
                                     collecting_prompt = False
                                     prompt_block = []
-                                    # 여기서 continue 안 하면 현재 라인도 다시 처리됨
-                                    # continue 하면 더 안전
+
+                                    # 라인 다시 재처리 방지
                                     continue
 
                                 prompt_block.append(line)
                                 continue
+
+
+
+
 
                             # --------------------------
                             # tags
@@ -587,8 +659,8 @@ class App(QWidget):
                             # 기존 key 처리
                             # --------------------------
                             for key in self.default_keys:
-                                if key == "tags":
-                                    continue  # tags는 따로 처리
+                                if key == "tags" or key == "hand_visible":
+                                    continue  # tags, hand_visible은 따로 처리
 
                                 if key == "task":
                                     if re.match(r'^\s*task\s*:', line):
@@ -667,6 +739,7 @@ class App(QWidget):
                     full_line = f"{short} {sub_line}"
                 else:
                     full_line = f"{sub_line}"
+
                     # path 길이 + 공백 1칸까지 포함해서 정렬
                     # indent = len(short) + 1
                     # full_line = f"{' ' * indent}{sub_line}"
@@ -735,6 +808,18 @@ class App(QWidget):
         f = QTextCharFormat()
         f.setForeground(QColor("#ff4444"))
         f.setBackground(QColor("#FFCECE"))
+        return f
+    
+    def format_font(self, color: str, bold: bool = False):
+        f = QTextCharFormat()                 # 텍스트 스타일 객체
+        
+        # 색상 적용
+        f.setForeground(QColor(color))        
+
+        # bold 적용
+        if bold:                              
+            f.setFontWeight(QFont.Bold)
+
         return f
     
 
