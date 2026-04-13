@@ -226,8 +226,20 @@ def is_problem_line(line: str, key: str) -> bool:
     if len(parts) < 2:
         return True
 
-    # 공백제거
+    # 공백제거 (첫 줄 value)
     value_part = parts[1].strip()
+
+    # ---------------------------
+    # 🔥 멀티라인 대응 추가
+    # ---------------------------
+    # prompt 등 여러 줄일 경우 전체 value로 재구성
+    if "\n" in line:
+        lines = line.split("\n")
+
+        # 첫 줄 이후 내용 붙이기
+        value_part = lines[0].split(":", 1)[1].strip() + "\n" + "\n".join(lines[1:])
+        value_part = value_part.strip()
+
     # ':' 가 없는 라인인제 체크
     if not value_part:
         return True
@@ -261,12 +273,20 @@ def is_problem_line(line: str, key: str) -> bool:
             return True
 
     elif key == "prompt":
-        # 손 포함 여부 검사
+        # 손 포함 여부 검사 (멀티라인 전체 기준)
         if not any(hand in value_part for hand in ["왼손", "오른손", "양손"]):
             return True
         
+        # 🔥 마지막 줄 기준으로 온점 검사
+        lines = [l.strip() for l in value_part.split("\n") if l.strip()]
+
+        if not lines:
+            return True
+
+        last_line = lines[-1]
+
         # 문장 끝 온점 검사
-        if not value_part.endswith("."):
+        if not last_line.endswith("."):
             return True
     
     # ID는 worker_숫자3자리만 허용
@@ -513,9 +533,33 @@ class App(QWidget):
                     with open(path, "r", encoding="utf-8") as file:
                         collecting_tags = False
                         tag_block = []
+                        
+                        collecting_prompt = False
+                        prompt_block = []
 
                         for line in file:
                             line = line.rstrip("\n")
+
+                            # --------------------------
+                            # prompt 블록 처리 시작
+                            # --------------------------
+                            if re.match(r'^\s*prompt\s*:', line):
+                                collecting_prompt = True
+                                prompt_block = [line]
+                                continue
+
+                            if collecting_prompt:
+                                # 다음 key 나오면 종료
+                                if re.match(r'^\s*\w+\s*:', line):
+                                    results_default["prompt"].append((path, "\n".join(prompt_block)))
+                                    collecting_prompt = False
+                                    prompt_block = []
+                                    # 여기서 continue 안 하면 현재 라인도 다시 처리됨
+                                    # continue 하면 더 안전
+                                    continue
+
+                                prompt_block.append(line)
+                                continue
 
                             # --------------------------
                             # tags
@@ -565,6 +609,12 @@ class App(QWidget):
                                 else:
                                     if user_query in line:
                                         results_user.append((path, line))
+
+
+                        if collecting_prompt:
+                            results_default["prompt"].append((path, "\n".join(prompt_block)))
+                            collecting_prompt = False
+                            prompt_block = []
 
                 except:
                     continue
