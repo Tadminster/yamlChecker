@@ -100,7 +100,12 @@ class SearchableResultView(QWidget):
         # 처음에는 검색 바를 숨김
         self.search_bar_widget.hide()
 
-
+        # Ctrl+F 액션
+        self.action_find = QAction(self)
+        self.action_find.setShortcut(QKeySequence.Find)
+        self.action_find.triggered.connect(self.show_search_bar)
+        self.addAction(self.action_find)
+        
         # ---------------------------
         # 메인 레이아웃
         # ---------------------------
@@ -120,18 +125,6 @@ class SearchableResultView(QWidget):
 
         # 마지막으로 실제 검색에 사용된 검색어
         self.current_query = ""
-
-        # Ctrl+F 액션 생성
-        self.action_find = QAction(self)
-
-        # 표준 찾기 단축키 지정
-        self.action_find.setShortcut(QKeySequence.Find)
-
-        # Ctrl+F 눌렀을 때 검색 바 열기
-        self.action_find.triggered.connect(self.show_search_bar)
-
-        # 현재 위젯에 액션 등록
-        self.addAction(self.action_find)
 
         # 닫기 버튼 클릭 시 검색 바 숨김
         self.close_button.clicked.connect(self.hide_search_bar)
@@ -1059,11 +1052,6 @@ class App(QWidget):
                                 continue
 
 
-
-
-
-
-
                             # --------------------------
                             # 기존 key 처리
                             # --------------------------
@@ -1134,12 +1122,24 @@ class App(QWidget):
 
         # 실제 화면 기준 라인 인덱스
         display_line_index = 0
+        # 이전 파일명 기록용
+        prev_path = None 
 
         for path, line in data:
             hide_filename = self.last_search_options.get("hide_filename", False)
 
             # 경로 축약 처리
             short = process_path_display(path, root, depth, hide_filename)
+
+            # hand_visible
+            if title == "hand_visible" and prev_path is not None and prev_path != path:
+                # 파일 바뀔 때 구분용 빈 라인 한 줄 추가
+                separator = ""
+                lines.append(separator)
+
+                # line_map 맞춰주기
+                self.line_maps[view.text_edit][display_line_index] = path
+                display_line_index += 1
 
             # 멀티라인 분리
             split_lines = line.split("\n")
@@ -1157,6 +1157,9 @@ class App(QWidget):
                 # 내부 text_edit 기준으로 path 매핑
                 self.line_maps[view.text_edit][display_line_index] = path
                 display_line_index += 1
+
+
+            prev_path = path
 
         # SearchableResultView의 setPlainText 사용
         view.setPlainText("\n".join(lines))
