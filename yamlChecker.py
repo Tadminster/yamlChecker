@@ -10,15 +10,422 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QPlainTextEdit, QLineEdit, QLabel,
-    QFileDialog, QTabWidget, QSpinBox,
+    QFileDialog, QTabWidget, QSpinBox, QTextEdit,
     QDialog, QCheckBox, QFrame, QMessageBox
 )
 
 from PySide6.QtGui import (
-    QColor, QTextCharFormat, QFont, QPalette, QSyntaxHighlighter
+    QColor, QTextCharFormat, QFont, QPalette, QSyntaxHighlighter,
+    QTextCursor, QKeySequence, QAction,
+
 )
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QEvent
+
+
+class SearchableResultView(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        # ---------------------------
+        # 루트
+        # ---------------------------
+        # 검색 결과 뷰어
+        self.text_edit = QPlainTextEdit()
+        self.text_edit.setReadOnly(True)    # 읽기 전용
+
+        # 탭 내 검색 바
+        self.search_bar_widget = QWidget()
+
+        # 검색 바용 가로 레이아웃 생성
+        self.search_bar_layout = QHBoxLayout(self.search_bar_widget)
+
+        # 검색 바 여백 제거
+        self.search_bar_layout.setContentsMargins(0, 0, 0, 0)
+
+        # ---------------------------
+        # 탭 내 검색
+        # ---------------------------
+        self.search_label = QLabel("탭 내 찾기")
+        self.search_label.setAlignment(Qt.AlignCenter)
+
+        # 검색어 입력창
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("탭 내 검색 (Enter: 검색/다음, Shift+Enter: 이전, Esc: 닫기)")
+
+        # current index/total index
+        self.result_label = QLabel("     ")
+
+        # 이전 버튼 (prev)
+        self.prev_button = QPushButton("◀")
+        self.prev_button.setFixedWidth(60)
+        self.prev_button.setToolTip("이전 검색 (Shift+Enter)")
+
+        # 다음 버튼 (next)
+        self.next_button = QPushButton("▶")
+        self.next_button.setFixedWidth(60)
+        self.next_button.setToolTip("다음 검색 (Enter)")
+
+        self.prev_button.clicked.connect(self.find_previous)
+        self.next_button.clicked.connect(self.find_next)
+
+        # 검색 바 닫기 버튼
+        self.close_button = QPushButton("X")
+        self.close_button.setFixedWidth(28)
+        self.close_button.setToolTip("닫기 (ESC)")
+
+        btn_style = """
+        QPushButton {
+            background-color: #E6ECF5;
+            border: 1px solid #BFC9DA;
+            border-radius: 4px;
+        }
+        QPushButton:hover {
+            background-color: #D6E4F5;
+        }
+        """
+
+        self.prev_button.setStyleSheet(btn_style)
+        self.next_button.setStyleSheet(btn_style)
+        self.close_button.setStyleSheet(btn_style)
+
+        # 검색 바 레이아웃에 위젯 추가
+        self.search_bar_layout.addWidget(self.search_label)
+        self.search_bar_layout.addWidget(self.search_input)
+        self.search_bar_layout.addWidget(self.prev_button)
+        self.search_bar_layout.addWidget(self.next_button)
+        self.search_bar_layout.addWidget(self.result_label)
+        self.search_bar_layout.addWidget(self.close_button)
+
+        # 처음에는 검색 바를 숨김
+        self.search_bar_widget.hide()
+
+
+        # ---------------------------
+        # 메인 레이아웃
+        # ---------------------------
+        self.main_layout = QVBoxLayout(self)
+
+        # 메인 레이아웃 여백 제거
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.main_layout.addWidget(self.text_edit)              # 검색 결과 뷰어
+        self.main_layout.addWidget(self.search_bar_widget)      # 탭내 검색 바
+
+        # 검색 결과 위치 목록 저장용 리스트
+        self.match_positions = []
+
+        # 현재 선택된 검색 결과 인덱스
+        self.current_match_index = -1
+
+        # 마지막으로 실제 검색에 사용된 검색어
+        self.current_query = ""
+
+        # Ctrl+F 액션 생성
+        self.action_find = QAction(self)
+
+        # 표준 찾기 단축키 지정
+        self.action_find.setShortcut(QKeySequence.Find)
+
+        # Ctrl+F 눌렀을 때 검색 바 열기
+        self.action_find.triggered.connect(self.show_search_bar)
+
+        # 현재 위젯에 액션 등록
+        self.addAction(self.action_find)
+
+        # 닫기 버튼 클릭 시 검색 바 숨김
+        self.close_button.clicked.connect(self.hide_search_bar)
+
+        # 검색 입력창 키 이벤트 처리를 위해 이벤트 필터 설치
+        self.search_input.installEventFilter(self)
+
+    def setPlainText(self, text: str):
+        # 외부에서 결과 문자열을 설정하는 함수
+        self.text_edit.setPlainText(text)
+
+        # 텍스트가 바뀌면 검색 상태 초기화
+        self.clear_search_state()
+
+    def toPlainText(self) -> str:
+        # 현재 텍스트 내용을 반환하는 함수
+        return self.text_edit.toPlainText()
+
+    def show_search_bar(self):
+        # 검색 바를 표시
+        self.search_bar_widget.show()
+
+        # 검색 입력창에 포커스 이동
+        self.search_input.setFocus()
+
+        # 기존 입력값이 있다면 전체 선택
+        self.search_input.selectAll()
+
+    def hide_search_bar(self):
+        # 검색 바 숨김
+        self.search_bar_widget.hide()
+
+        # 전체 하이라이트 제거
+        self.text_edit.setExtraSelections([])
+
+        # 현재 선택 영역 제거
+        cursor = self.text_edit.textCursor()
+        cursor.clearSelection()
+        self.text_edit.setTextCursor(cursor)
+
+        # 결과 텍스트 쪽으로 포커스 복귀
+        self.text_edit.setFocus()
+
+    def clear_search_state(self):
+        # 검색 결과 위치 목록 초기화
+        self.match_positions = []
+
+        # 현재 검색 결과 인덱스 초기화
+        self.current_match_index = -1
+
+        # 현재 검색어 초기화
+        self.current_query = ""
+
+        # 결과 라벨 초기화
+        self.result_label.setText("0 / 0")
+
+        # 전체 하이라이트 제거
+        self.text_edit.setExtraSelections([])
+
+    def rebuild_matches(self, query: str):
+        # 기존 검색 결과 목록 초기화
+        self.match_positions = []
+
+        # 검색어가 비어 있으면 상태만 갱신 후 종료
+        if not query:
+            self.current_query = ""
+            self.current_match_index = -1
+            self.result_label.setText("0 / 0")
+            self.text_edit.setExtraSelections([])
+            return
+
+        # 전체 텍스트 가져오기
+        full_text = self.text_edit.toPlainText()
+
+        # 대소문자 무시 검색을 위해 소문자로 변환한 전체 텍스트
+        lower_text = full_text.lower()
+
+        # 대소문자 무시 검색을 위해 소문자로 변환한 검색어
+        lower_query = query.lower()
+
+        # 검색 시작 위치
+        start = 0
+
+        # 실제 선택 범위 계산을 위한 검색어 길이
+        query_len = len(query)
+
+        # 전체 문서에서 검색어를 모두 찾을 때까지 반복
+        while True:
+            # 현재 시작 위치 이후에서 검색어 위치 찾기
+            index = lower_text.find(lower_query, start)
+
+            # 더 이상 검색 결과가 없으면 반복 종료
+            if index == -1:
+                break
+
+            # 검색 결과 시작/끝 위치 저장
+            self.match_positions.append((index, index + query_len))
+
+            # 다음 검색 시작 위치 갱신
+            start = index + query_len
+
+        # 실제 검색에 사용된 검색어 저장
+        self.current_query = query
+
+        # 검색 결과가 있으면 첫 번째 결과 인덱스로 준비
+        if self.match_positions:
+            self.current_match_index = 0
+            self.result_label.setText(f"1 / {len(self.match_positions)}")
+        else:
+            self.current_match_index = -1
+            self.result_label.setText("0 / 0")
+
+        # 전체 하이라이트 갱신
+        self.update_highlight_selections()
+
+    def move_to_match(self, match_index: int):
+        # 검색 결과가 없으면 종료
+        if not self.match_positions:
+            self.result_label.setText("0 / 0")
+            return
+
+        # 현재 인덱스의 검색 결과 범위 가져오기
+        start, end = self.match_positions[match_index]
+
+        # 현재 커서 가져오기
+        cursor = self.text_edit.textCursor()
+
+        # 검색 결과 시작 위치로 이동
+        cursor.setPosition(start)
+
+        # 검색 결과 끝까지 선택
+        cursor.setPosition(end, QTextCursor.KeepAnchor)
+
+        # 에디터에 커서 반영
+        self.text_edit.setTextCursor(cursor)
+
+        # 현재 결과가 화면 중앙에 오도록 스크롤 이동
+        self.text_edit.centerCursor()
+
+        # 결과 라벨 갱신
+        self.result_label.setText(f"{match_index + 1} / {len(self.match_positions)}")
+
+        # 전체 하이라이트 갱신
+        self.update_highlight_selections()
+
+    def update_highlight_selections(self):
+        # 하이라이트 목록 저장용 리스트
+        selections = []
+
+        # 검색 결과가 없으면 하이라이트 제거 후 종료
+        if not self.match_positions:
+            self.text_edit.setExtraSelections([])
+            return
+
+        # 모든 검색 결과에 대해 하이라이트 생성
+        for i, (start, end) in enumerate(self.match_positions):
+            # 각 검색 결과 범위용 커서 생성
+            cursor = self.text_edit.textCursor()
+
+            # 검색 결과 시작 위치로 이동
+            cursor.setPosition(start)
+
+            # 검색 결과 끝 위치까지 선택
+            cursor.setPosition(end, QTextCursor.KeepAnchor)
+
+            # 추가 선택 영역 객체 생성
+            selection = QTextEdit.ExtraSelection()
+
+            # 선택 영역 커서 지정
+            selection.cursor = cursor
+
+            # 하이라이트 포맷 생성
+            fmt = QTextCharFormat()
+
+            # 현재 선택된 결과는 더 진한 색
+            if i == self.current_match_index:
+                fmt.setBackground(QColor("#FFD54F"))
+
+            # 나머지 결과는 더 연한 색
+            else:
+                fmt.setBackground(QColor("#FFF59D"))
+
+            # 포맷 적용
+            selection.format = fmt
+
+            # 선택 목록에 추가
+            selections.append(selection)
+
+        # 전체 하이라이트 반영
+        self.text_edit.setExtraSelections(selections)
+
+    def execute_search_or_next(self):
+        # 입력창의 현재 검색어를 앞뒤 공백 제거해서 가져오기
+        query = self.search_input.text().strip()
+
+        # 비어 있으면 검색 안 함
+        if not query:
+            self.clear_search_state()
+            return
+
+        # 아직 검색한 적이 없거나 검색어가 이전과 달라졌으면 새 검색 수행
+        if query != self.current_query:
+            self.rebuild_matches(query)
+
+            # 검색 결과가 있으면 첫 번째 결과로 이동
+            if self.match_positions:
+                self.move_to_match(self.current_match_index)
+
+            return
+
+        # 검색어가 같으면 다음 결과로 이동
+        self.find_next()
+
+    def execute_search_or_previous(self):
+        # 입력창의 현재 검색어를 앞뒤 공백 제거해서 가져오기
+        query = self.search_input.text().strip()
+
+        # 비어 있으면 검색 안 함
+        if not query:
+            self.clear_search_state()
+            return
+
+        # 아직 검색한 적이 없거나 검색어가 이전과 달라졌으면 새 검색 수행
+        if query != self.current_query:
+            self.rebuild_matches(query)
+
+            # 검색 결과가 있으면 마지막 결과로 이동하고 싶다면 여기서 마지막으로 변경 가능
+            # 현재는 첫 번째 결과로 맞춤
+            if self.match_positions:
+                self.move_to_match(self.current_match_index)
+
+            return
+
+        # 검색어가 같으면 이전 결과로 이동
+        self.find_previous()
+
+    def find_next(self):
+        # 검색 결과가 없으면 종료
+        if not self.match_positions:
+            self.result_label.setText("0 / 0")
+            return
+
+        # 아직 선택된 결과가 없으면 첫 번째 결과 선택
+        if self.current_match_index == -1:
+            self.current_match_index = 0
+        else:
+            # 다음 결과로 이동, 끝이면 처음으로 순환
+            self.current_match_index = (self.current_match_index + 1) % len(self.match_positions)
+
+        # 해당 결과 위치로 이동
+        self.move_to_match(self.current_match_index)
+
+    def find_previous(self):
+        # 검색 결과가 없으면 종료
+        if not self.match_positions:
+            self.result_label.setText("0 / 0")
+            return
+
+        # 아직 선택된 결과가 없으면 마지막 결과 선택
+        if self.current_match_index == -1:
+            self.current_match_index = len(self.match_positions) - 1
+        else:
+            # 이전 결과로 이동, 처음보다 앞이면 마지막으로 순환
+            self.current_match_index = (self.current_match_index - 1) % len(self.match_positions)
+
+        # 해당 결과 위치로 이동
+        self.move_to_match(self.current_match_index)
+
+    def eventFilter(self, obj, event):
+        # 검색 입력창에서 발생한 키 이벤트만 처리
+        if obj == self.search_input and event.type() == QEvent.KeyPress:
+            # 눌린 키 코드 가져오기
+            key = event.key()
+
+            # 현재 보조키 상태 가져오기
+            modifiers = event.modifiers()
+
+            # Shift + Enter면 이전 검색 결과 또는 검색 실행
+            if key in (Qt.Key_Return, Qt.Key_Enter) and (modifiers & Qt.ShiftModifier):
+                self.execute_search_or_previous()
+                return True
+
+            # Enter면 검색 실행 또는 다음 검색 결과 이동
+            if key in (Qt.Key_Return, Qt.Key_Enter):
+                self.execute_search_or_next()
+                return True
+
+            # Esc면 검색 바 닫기
+            if key == Qt.Key_Escape:
+                self.hide_search_bar()
+                return True
+
+        # 나머지 이벤트는 기본 처리로 넘김
+        return super().eventFilter(obj, event)
 
 
 # ==================================================
@@ -358,7 +765,7 @@ class ResultHighlighter(QSyntaxHighlighter):
 
                 content_start = first_space + 1 if first_space > 0 else 0
 
-                # key 위치 계산
+                # 키 컬러 적용을 위한 텍스트
                 target = "hand_visible"
 
                 # key_name 안에서 "hand_visible" 위치 찾기
@@ -515,7 +922,7 @@ class App(QWidget):
 
         self.default_keys = [
             "version", "timestamp", "episode_name", "domain",
-            "collect_place", "collect_place_description",
+            "collect_place", #"collect_place_description",
             "collect_device", "zed_serial", "scenario",
             "task", "name", "prompt", "hand_visible",
             "tags", "id", "gender", "height", "main_hand"
@@ -609,6 +1016,28 @@ class App(QWidget):
                                 continue
 
                             # --------------------------
+                            # tags
+                            # --------------------------
+                            # tag 블록 시작
+                            if re.match(r'^\s*tags\s*:', line):
+                                collecting_tags = True
+                                tag_block = [line]
+                                continue
+                            
+                            # tag 수집
+                            if collecting_tags:
+                                # 다음 key 나오면 종료
+                                if re.match(r'^\s*\w+\s*:', line):
+                                    results_default["tags"].append((path, "\n".join(tag_block)))
+                                    collecting_tags = False
+                                    tag_block = []
+                                    continue
+
+                                # 계속 수집
+                                tag_block.append(line)
+                                continue
+
+                            # --------------------------
                             # prompt
                             # --------------------------
                             if re.match(r'^\s*prompt\s*:', line):
@@ -633,27 +1062,7 @@ class App(QWidget):
 
 
 
-                            # --------------------------
-                            # tags
-                            # --------------------------
-                            # tag 블록 시작
-                            if re.match(r'^\s*tags\s*:', line):
-                                collecting_tags = True
-                                tag_block = [line]
-                                continue
-                            
-                            # tag 수집
-                            if collecting_tags:
-                                # 다음 key 나오면 종료
-                                if re.match(r'^\s*\w+\s*:', line):
-                                    results_default["tags"].append((path, "\n".join(tag_block)))
-                                    collecting_tags = False
-                                    tag_block = []
-                                    continue
 
-                                # 계속 수집
-                                tag_block.append(line)
-                                continue
 
                             # --------------------------
                             # 기존 key 처리
@@ -688,6 +1097,9 @@ class App(QWidget):
                             collecting_prompt = False
                             prompt_block = []
 
+                        if collecting_tags:
+                            results_default["tags"].append((path, "\n".join(tag_block)))
+
                 except:
                     continue
 
@@ -701,27 +1113,27 @@ class App(QWidget):
             if data:
                 self.add_tab(key, data, key)
 
+
     def add_tab(self, title, data, current_query):
-        # 결과 출력용 텍스트 위젯 생성
-        text = QPlainTextEdit()
-        text.setReadOnly(True)  # 읽기 전용
-        text.setFont(QFont("Consolas", 11))  # 고정폭 폰트
+        # 검색 가능한 결과 뷰 위젯 생성
+        view = SearchableResultView()
 
-        # 탭 추가
-        self.tabs.addTab(text, title)
+        # 내부 텍스트 에디터에 폰트 적용
+        view.text_edit.setFont(QFont("Consolas", 11))
 
-        # 라인 매핑 초기화
-        self.line_maps[text] = {}
+        # 탭에 SearchableResultView 자체를 추가
+        self.tabs.addTab(view, title)
 
-        lines = []  # 실제 UI에 출력할 문자열 리스트
+        # 라인 매핑은 내부 text_edit 기준으로 관리
+        self.line_maps[view.text_edit] = {}
+
+        lines = []
 
         root = self.path_input.text().strip()
         depth = self.last_search_options["depth"]
 
-        # --------------------------
-        # 멀티라인 대응 라인 매핑
-        # --------------------------
-        display_line_index = 0  # 실제 화면 기준 라인 인덱스
+        # 실제 화면 기준 라인 인덱스
+        display_line_index = 0
 
         for path, line in data:
             hide_filename = self.last_search_options.get("hide_filename", False)
@@ -733,37 +1145,35 @@ class App(QWidget):
             split_lines = line.split("\n")
 
             for j, sub_line in enumerate(split_lines):
-
                 # 첫 줄은 경로 포함
                 if j == 0:
                     full_line = f"{short} {sub_line}"
                 else:
                     full_line = f"{sub_line}"
 
-                    # path 길이 + 공백 1칸까지 포함해서 정렬
-                    # indent = len(short) + 1
-                    # full_line = f"{' ' * indent}{sub_line}"
-
                 # 실제 출력 리스트에 추가
                 lines.append(full_line)
 
-                # 실제 표시되는 모든 라인에 path 매핑
-                self.line_maps[text][display_line_index] = path
-                display_line_index += 1  # 다음 라인으로 증가
+                # 내부 text_edit 기준으로 path 매핑
+                self.line_maps[view.text_edit][display_line_index] = path
+                display_line_index += 1
 
-        # 텍스트 한번에 출력
-        text.setPlainText("\n".join(lines))
+        # SearchableResultView의 setPlainText 사용
+        view.setPlainText("\n".join(lines))
 
-        # 하이라이터 적용
-        text._highlighter = ResultHighlighter(
-            text.document(),
+        # 하이라이터는 내부 text_edit.document() 에 적용
+        view.text_edit._highlighter = ResultHighlighter(
+            view.text_edit.document(),
             self,
             current_query=current_query,
             current_key=title
         )
 
         # 더블 클릭 이벤트 연결
-        text.mouseDoubleClickEvent = lambda e, t=text: self.open_from_click(e, t)
+        view.text_edit.mouseDoubleClickEvent = (
+            lambda e, t=view.text_edit: self.open_from_click(e, t)
+        )
+
 
     def open_from_click(self, event, text):
         cursor = text.cursorForPosition(event.position().toPoint())
