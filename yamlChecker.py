@@ -54,7 +54,7 @@ class SearchableResultView(QWidget):
         self.search_input.setPlaceholderText("탭 내 검색 (Enter: 검색/다음, Shift+Enter: 이전, Esc: 닫기)")
 
         # current index/total index
-        self.result_label = QLabel("     ")
+        self.result_label = QLabel("0 / 0")
 
         # 이전 버튼 (prev)
         self.prev_button = QPushButton("◀")
@@ -72,7 +72,7 @@ class SearchableResultView(QWidget):
         # 검색 바 닫기 버튼
         self.close_button = QPushButton("X")
         self.close_button.setFixedWidth(28)
-        self.close_button.setToolTip("닫기 (ESC)")
+        self.close_button.setToolTip("탭 내 검색 닫기 (ESC)")
 
         btn_style = """
         QPushButton {
@@ -105,7 +105,7 @@ class SearchableResultView(QWidget):
         self.action_find.setShortcut(QKeySequence.Find)
         self.action_find.triggered.connect(self.show_search_bar)
         self.addAction(self.action_find)
-        
+
         # ---------------------------
         # 메인 레이아웃
         # ---------------------------
@@ -167,6 +167,7 @@ class SearchableResultView(QWidget):
 
         # 결과 텍스트 쪽으로 포커스 복귀
         self.text_edit.setFocus()
+        self.text_edit.activateWindow()
 
     def clear_search_state(self):
         # 검색 결과 위치 목록 초기화
@@ -399,6 +400,9 @@ class SearchableResultView(QWidget):
             # 눌린 키 코드 가져오기
             key = event.key()
 
+            focus_widget = QApplication.focusWidget()
+            # print(f"[KEY] key={key}, focus={type(focus_widget)}")
+
             # 현재 보조키 상태 가져오기
             modifiers = event.modifiers()
 
@@ -614,6 +618,10 @@ class SearchOptionsDialog(QDialog):
 # 문제 라인 검사 함수
 # ==================================================
 def is_problem_line(line: str, key: str) -> bool:
+    """
+    @return True: 문제 있는 라인
+    @return False: 정상 라인
+    """
 
     # 태그 탭은 따로 검사하지 않음
     if key == "tags":
@@ -671,6 +679,20 @@ def is_problem_line(line: str, key: str) -> bool:
         # 정확히 13자리만 허용
         if len(value_part) != 13:
             return True
+        
+    elif key == "episode_name":
+        # _를 기준으로 문자열 분리
+        episode_parts  = value_part.split('_')
+
+        # 분리된 문자열이 5개인지 확인
+        if len(episode_parts) != 5:
+            return True  # 개수 틀리면 실패
+
+        # 마지막 요소 (timestamp)
+        last_part = episode_parts[-1]  
+        # 17자리 숫자인지 확인
+        if not (last_part.isdigit() and len(last_part) == 13):
+            return True  # 숫자 아니거나 길이 다르면 실패
 
     elif key == "prompt":
         # 손 포함 여부 검사 (멀티라인 전체 기준)
@@ -913,6 +935,10 @@ class App(QWidget):
         root_layout.addWidget(self.content_widget)
         self.setLayout(root_layout)
 
+        # 전역 키 입력 감지
+        # self.installEventFilter(self)
+
+
         self.default_keys = [
             "version", "timestamp", "episode_name", "domain",
             "collect_place", #"collect_place_description",
@@ -922,6 +948,7 @@ class App(QWidget):
         ]
 
         self._original_style = ""
+
 
     # ==================================================
     # 옵션
@@ -1106,8 +1133,10 @@ class App(QWidget):
         # 검색 가능한 결과 뷰 위젯 생성
         view = SearchableResultView()
 
+        view.text_edit.installEventFilter(self)
         # 내부 텍스트 에디터에 폰트 적용
         view.text_edit.setFont(QFont("Consolas", 11))
+        
 
         # 탭에 SearchableResultView 자체를 추가
         self.tabs.addTab(view, title)
@@ -1184,6 +1213,49 @@ class App(QWidget):
 
         if line in self.line_maps[text]:
             open_file(self.line_maps[text][line])
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and isinstance(obj, QPlainTextEdit):
+
+            key = event.key()
+            focus_widget = QApplication.focusWidget()
+
+            # print(f"[KEY] key={key}, focus={type(focus_widget)}")
+
+            # ----------------------
+            # 좌우 탭이동
+            # ----------------------
+            if key == Qt.Key_Left:
+                current = self.tabs.currentIndex()
+                if current > 0:
+                    self.tabs.setCurrentIndex(current - 1)
+                return True
+
+            elif key == Qt.Key_Right:
+                current = self.tabs.currentIndex()
+                if current < self.tabs.count() - 1:
+                    self.tabs.setCurrentIndex(current + 1)
+                return True
+
+            # ----------------------
+            # 상하 스크롤
+            # ----------------------
+            elif key == Qt.Key_Up or key == Qt.Key_Down:
+
+                scrollbar = obj.verticalScrollBar()
+
+                # 한번에 스크롤 될 값 계산
+                base = obj.fontMetrics().height()
+                step = max(1, base // 4)
+
+                if key == Qt.Key_Up:
+                    scrollbar.setValue(scrollbar.value() - step)
+                else:
+                    scrollbar.setValue(scrollbar.value() + step)
+
+                return True
+
+        return super().eventFilter(obj, event)
 
     # ==================================================
     # 스타일
