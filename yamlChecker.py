@@ -1047,15 +1047,15 @@ class App(QWidget):
                             # tag 수집
                             if collecting_tags:
                                 # 다음 key 나오면 종료
-                                if re.match(r'^\s*\w+\s*:', line):
+                                if re.match(r'^\s*[a-zA-Z_]+\s*:', line):
                                     results_default["tags"].append((path, "\n".join(tag_block)))
                                     collecting_tags = False
                                     tag_block = []
-                                    continue
-
+                                    # continue
+                                else:
                                 # 계속 수집
-                                tag_block.append(line)
-                                continue
+                                    tag_block.append(line)
+                                    continue
 
                             # --------------------------
                             # prompt
@@ -1067,33 +1067,43 @@ class App(QWidget):
 
                             if collecting_prompt:
                                 # 다음 key 나오면 종료
-                                if re.match(r'^\s*(-\s*)?\w+\s*:', line):
+                                if re.match(r'^\s*(-\s*)?[a-zA-Z_]+\s*:', line):
                                     results_default["prompt"].append((path, "\n".join(prompt_block)))
                                     collecting_prompt = False
                                     prompt_block = []
 
                                     # 라인 다시 재처리 방지
+                                    # continue
+                                else:
+                                    prompt_block.append(line)
                                     continue
-
-                                prompt_block.append(line)
-                                continue
 
 
                             # --------------------------
                             # 기존 key 처리
                             # --------------------------
                             for key in self.default_keys:
-                                if key == "tags" or key == "hand_visible":
-                                    continue  # tags, hand_visible은 따로 처리
+                                # tags, hand_visible은 따로 처리
+                                if key in ["tags", "hand_visible"]:
+                                     continue
+                                
+                                if key == "name":
+                                    if re.match(r'^\s*(-\s*)?name\s*:', line):
+                                        results_default[key].append((path, line))
+                                    continue
 
+                                if key == "id":
+                                    if "id" in line:
+                                        results_default[key].append((path, line))
+                                    continue
+                                
                                 if key == "task":
                                     if re.match(r'^\s*task\s*:', line):
                                         results_default[key].append((path, line))
-                                        break
-                                else:
-                                    if key in line:
-                                        results_default[key].append((path, line))
-                                        break
+                                    continue
+
+                                if key in line:
+                                    results_default[key].append((path, line))
 
                             if user_query:
                                 if use_regex:
