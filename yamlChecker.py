@@ -744,15 +744,38 @@ def is_problem_line(line: str, key: str) -> bool:
 # 하이라이터
 # ==================================================
 class ResultHighlighter(QSyntaxHighlighter):
-    def __init__(self, document, app_instance, current_query="", current_key=""):
+    def __init__(self, document, app_instance, current_query="", current_key="", is_user_tab=False):
         super().__init__(document)
         self.app = app_instance                         # App 인스턴스 (format 함수 접근용)
         self.current_query = current_query.strip()      # 현재 검색어
         self.current_key = current_key                  # 현재 탭 key
+        self.is_user_tab = is_user_tab                  # 유저탭 여부
 
     def highlightBlock(self, text):
         if not text:
             return
+
+        # -----------------------------------
+        # 사용자 입력 탭 전용 (검색어만 하이라이트)
+        # -----------------------------------
+        if self.is_user_tab:
+            if not self.current_query:
+                return
+
+            lower = text.lower()
+            q = self.current_query.lower()
+
+            start = 0
+            while True:
+                idx = lower.find(q, start)
+                if idx == -1:
+                    break
+
+                self.setFormat(idx, len(q), self.app.format_key())
+                start = idx + len(q)
+
+            return
+
 
         # -----------------------------
         # 경로 / 값 분리
@@ -1010,6 +1033,40 @@ class App(QWidget):
         results_default = {k: [] for k in self.default_keys}
         results_user = []
 
+        results_user = []
+
+        # 사용자 입력 검색어 처리
+        if user_query:
+            try:
+                cmd = [
+                    "grep",
+                    "-rP" if use_regex else "-rF",
+                    "--include=*.yaml",
+                    user_query,
+                    root
+                ]
+
+                result = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    encoding="utf-8"
+                )
+
+                grep_lines = result.stdout.splitlines()
+
+                for line in grep_lines:
+                    try:
+                        path, content = line.split(":", 1)
+                    except ValueError:
+                        continue
+
+                    results_user.append((path, content))
+
+            except Exception as e:
+                print(e)
+
         for r, _, files in os.walk(root):
             for f in files:
                 if not f.endswith(".yaml"):
@@ -1105,18 +1162,6 @@ class App(QWidget):
                                 if key in line:
                                     results_default[key].append((path, line))
 
-                            if user_query:
-                                if use_regex:
-                                    try:
-                                        if re.search(user_query, line):
-                                            results_user.append((path, line))
-                                    except:
-                                        pass
-                                else:
-                                    if user_query in line:
-                                        results_user.append((path, line))
-
-
                         if collecting_prompt:
                             results_default["prompt"].append((path, "\n".join(prompt_block)))
                             collecting_prompt = False
@@ -1164,6 +1209,40 @@ class App(QWidget):
         # 이전 파일명 기록용
         prev_path = None 
 
+
+        # -----------------------------------
+        # 사용자 입력 탭 분기
+        # -----------------------------------
+        user_query = self.key_input.text().strip()
+
+        if title == user_query and user_query:
+            for path, line in data:
+                full_line = f"{path}:{line}"
+                lines.append(full_line)
+
+                self.line_maps[view.text_edit][display_line_index] = path
+                display_line_index += 1
+
+            view.setPlainText("\n".join(lines))
+
+            view.text_edit._highlighter = ResultHighlighter(
+                view.text_edit.document(),
+                self,
+                current_query=current_query,
+                current_key="",
+                is_user_tab=True
+            )
+
+            view.text_edit.mouseDoubleClickEvent = (
+                lambda e, t=view.text_edit: self.open_from_click(e, t)
+            )
+
+            return
+
+
+        # -----------------------------------
+        # default key 분기
+        # -----------------------------------
         for path, line in data:
             hide_filename = self.last_search_options.get("hide_filename", False)
 
@@ -1203,12 +1282,15 @@ class App(QWidget):
         # SearchableResultView의 setPlainText 사용
         view.setPlainText("\n".join(lines))
 
+        user_query = self.key_input.text().strip()
+
         # 하이라이터는 내부 text_edit.document() 에 적용
         view.text_edit._highlighter = ResultHighlighter(
             view.text_edit.document(),
             self,
             current_query=current_query,
-            current_key=title
+            current_key=title,
+            is_user_tab=(title == user_query and user_query != "")
         )
 
         # 더블 클릭 이벤트 연결
