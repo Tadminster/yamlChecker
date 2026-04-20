@@ -6,6 +6,7 @@ import re
 import json
 
 from pathlib import Path 
+from datetime import datetime, timezone, timedelta
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
@@ -24,9 +25,10 @@ from PySide6.QtCore import Qt, QEvent
 
 
 class SearchableResultView(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, app, parent=None):
         super().__init__(parent)
 
+        self.app = app
         # ---------------------------
         # 루트
         # ---------------------------
@@ -420,9 +422,112 @@ class SearchableResultView(QWidget):
             if key == Qt.Key_Escape:
                 self.hide_search_bar()
                 return True
+            
 
         # 나머지 이벤트는 기본 처리로 넘김
         return super().eventFilter(obj, event)
+
+
+    # 컨트롤 클릭 이벤트
+    def ctrl_click_debug(self, event):
+        if not (event.modifiers() & Qt.ControlModifier):
+            return False
+
+        cursor = self.text_edit.cursorForPosition(event.position().toPoint())
+        
+        block = cursor.block()
+        line_text = block.text()
+
+        # timestamp만 처리
+        if "timestamp:" not in line_text:
+            return False
+
+        self.print_timestamp_debug(block, line_text)
+
+        return True
+
+    def print_timestamp_debug(self, block, line_text):
+        try:
+            match = re.search(r'timestamp:\s*(\d+)', line_text)
+            if not match:
+                print("[DEBUG] timestamp 파싱 실패")
+                return
+
+            ts = int(match.group(1))
+
+            # 현재 라인의 파일 경로
+            block_number = block.blockNumber()
+            path = self.app.line_maps.get(self.text_edit, {}).get(block_number)
+
+            if not path or not os.path.exists(path):
+                print("[DEBUG] 파일 경로 없음:", path)
+                return
+
+            # -----------------------------
+            # YAML 파일 읽기
+            # -----------------------------
+            episode_time_str = extract_episode_time_from_yaml(path)
+
+            if not episode_time_str:
+                print("[DEBUG] episode_name에서 시간 추출 실패")
+                return
+
+            # -----------------------------
+            # timestamp 계산
+            # -----------------------------
+            expected = kst_to_timestamp_ms(episode_time_str)
+            diff = ts - expected
+
+            minutes = abs(diff) // 60000
+            seconds = (abs(diff) % 60000) / 1000
+            sign = "+" if diff >= 0 else "-"
+
+
+            label_width = 8
+
+            print(f"""
+            [Timestamp Debug]
+            ----------------------------------------
+            {"파일":<{label_width}} : {path}
+            {"촬영시작":<{label_width-2}} : {episode_time_str}
+
+            {"기준(ms)":<{label_width}} : {expected}
+            {"현재(ms)":<{label_width}} : {ts}
+
+            {"차이":<{label_width}} : {diff} ms ({sign} {int(minutes)}분 {seconds:.3f}초)
+            ----------------------------------------
+            """)
+
+        except Exception as e:
+            print(f"[DEBUG ERROR] {e}")
+
+
+def extract_episode_time_from_yaml(path: str) -> str | None:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                if not line.startswith("episode_name:"):
+                    continue
+
+                value = line.split(":", 1)[1].strip()
+
+                # episode_name 안에서 YYMMDD_HHMMSS 패턴 직접 찾기
+                match = re.search(r'(\d{6})_(\d{6})', value)
+                if not match:
+                    return None
+
+                date_part = match.group(1)
+                time_part = match.group(2)
+
+                return f"{date_part}_{time_part}"
+
+    except Exception as e:
+        print(f"[DEBUG ERROR] episode_name 읽기 실패: {e}")
+
+    return None
+
 
 
 # ==================================================
@@ -484,6 +589,23 @@ def open_file(path):
             subprocess.call(["xdg-open", path])
     except Exception as e:
         print(e)
+
+
+# ==================================================
+# 시간 문자열 -> KST Unix Timestamp(ms)
+# ==================================================
+def kst_to_timestamp_ms(date_str: str) -> int:
+    # "260112_135500" 형식 문자열을 datetime으로 변환
+    dt = datetime.strptime(date_str, "%y%m%d_%H%M%S")
+
+    # KST 시간대 객체 생성 (UTC+9)
+    kst = timezone(timedelta(hours=9))
+
+    # 파싱한 datetime에 KST 시간대 지정
+    dt = dt.replace(tzinfo=kst)
+
+    # Unix Timestamp를 초 단위로 구한 뒤 밀리초로 변환
+    return int(dt.timestamp() * 1000)
 
 
 # ==================================================
@@ -617,7 +739,7 @@ class SearchOptionsDialog(QDialog):
 # ==================================================
 # 문제 라인 검사 함수
 # ==================================================
-def is_problem_line(line: str, key: str) -> bool:
+def is_problem_line(line: str, key: str, path: str = None) -> bool:
     """
     @return True: 문제 있는 라인
     @return False: 정상 라인
@@ -680,6 +802,63 @@ def is_problem_line(line: str, key: str) -> bool:
         if len(value_part) != 13:
             return True
         
+        # ---------------------------
+        # 폴더명 기반 검증
+        # ---------------------------
+        if path:
+            try:
+                # 전체 경로에서 시간 패턴 찾기
+                match = re.search(r'(\d{6})_(\d{6})', path)
+
+                if match:
+                    date_part = match.group(1)
+                    time_part = match.group(2)
+
+                    time_str = f"{date_part}_{time_part}"
+
+
+                    ts = int(value_part)
+                    expected = kst_to_timestamp_ms(time_str)
+
+                        
+                    # ---------------------------
+                    # 디버그 로그
+                    # ---------------------------
+
+                    # diff = ts - expected
+                    # # ms → 분/초 변환
+                    # minutes = abs(diff) // 60000
+                    # seconds = (abs(diff) % 60000) / 1000
+
+                    # print(
+                    #     f"""
+                    # [Timestamp Debug]
+                    # ----------------------------------------
+                    # 폴더명     : {folder}
+                    # 촬영 시작  : {time_str}
+
+                    # 기준(ms)   : {expected}
+                    # 현재(ms)   : {ts}
+
+                    # 차이       : {diff} ms (약 {int(minutes)}분 {seconds:.3f}초)
+                    # ----------------------------------------
+                    # """
+                    # )
+
+                    # ---------------------------
+                    # 범위 기반 검증
+                    # ---------------------------
+                    # 시작 시간보다 과거면 오류
+                    if ts < expected:
+                        return True
+
+                    # 너무 미래면 오류 (1시간 이상)
+                    if ts > expected + 3600000:
+                        return True
+
+            except:
+                return True
+        
     elif key == "episode_name":
         # _를 기준으로 문자열 분리
         episode_parts  = value_part.split('_')
@@ -739,6 +918,86 @@ def is_problem_line(line: str, key: str) -> bool:
     # 정상 문장
     return False
 
+
+# def get_problem_reason(line: str, key: str, path: str = None) -> str:
+#     parts = line.split(":", 1)
+
+#     if len(parts) < 2:
+#         return "':' 구분자가 없습니다."
+
+#     value_part = parts[1].strip()
+
+#     if not value_part:
+#         return "값이 비어있습니다."
+
+#     first_char = value_part[0]
+#     if not re.match(r'[a-zA-Z0-9가-힣]', first_char):
+#         return "값이 잘못된 문자로 시작합니다."
+
+#     # ---------------------------
+#     # key별 검사
+#     # ---------------------------
+
+#     if key == "version":
+#         if value_part != "0.2":
+#             return "version은 반드시 0.2여야 합니다."
+
+#     elif key == "timestamp":
+#         if not value_part.isdigit():
+#             return "timestamp는 숫자만 가능합니다."
+
+#         if len(value_part) != 13:
+#             return "timestamp는 13자리(ms)여야 합니다."
+
+#         if path:
+#             try:
+#                 folder = path.replace("\\", "/").split("/")[-2]
+#                 parts = folder.split("_")
+
+#                 if len(parts) >= 2:
+#                     date_part = parts[-2]
+#                     time_part = parts[-1]
+
+#                     time_str = f"{date_part}_{time_part}"
+
+#                     ts = int(value_part)
+#                     expected = kst_to_timestamp_ms(time_str)
+
+#                     diff = ts - expected
+
+#                     if ts < expected:
+#                         return "촬영 시작 시간보다 이전입니다."
+
+#                     if ts > expected + 3600000:
+#                         return "촬영 시작 기준 1시간을 초과했습니다."
+
+#                     # 정상인데도 tooltip 띄우고 싶으면
+#                     return None
+
+#             except:
+#                 return "timestamp 파싱 실패"
+
+#     elif key == "id":
+#         if not re.match(r'^worker_\d{3}$', value_part):
+#             return "id는 worker_000 형식이어야 합니다."
+
+#     elif key == "gender":
+#         if value_part not in ("male", "female"):
+#             return "gender는 male 또는 female만 허용됩니다."
+
+#     elif key == "height":
+#         if not value_part.isdigit():
+#             return "height는 숫자여야 합니다."
+
+#         h = int(value_part)
+#         if h < 1200 or h > 2200:
+#             return "height는 1200~2200 범위여야 합니다."
+
+#     elif key == "main_hand":
+#         if value_part not in ("left", "right"):
+#             return "main_hand는 left 또는 right만 허용됩니다."
+
+#     return None
 
 # ==================================================
 # 하이라이터
@@ -845,7 +1104,11 @@ class ResultHighlighter(QSyntaxHighlighter):
         # -----------------------------
         # 문제 라인 검사
         # -----------------------------
-        if is_problem_line(content, self.current_key):
+
+        # path 추출
+        path_part = text[:first_space] if first_space > 0 else None
+
+        if is_problem_line(content, self.current_key, path_part):
             self.setFormat(
                 first_space + 1 if first_space > 0 else 0,
                 len(content),
@@ -1186,9 +1449,8 @@ class App(QWidget):
 
     def add_tab(self, title, data, current_query):
         # 검색 가능한 결과 뷰 위젯 생성
-        view = SearchableResultView()
+        view = SearchableResultView(self)
 
-        view.text_edit.installEventFilter(self)
         # 내부 텍스트 에디터에 폰트 적용
         view.text_edit.setFont(QFont("Consolas", 11))
         
@@ -1292,6 +1554,17 @@ class App(QWidget):
             current_key=title,
             is_user_tab=(title == user_query and user_query != "")
         )
+
+        # 마우스 입력 핸들러
+        def mouse_press_handler(e, t=view.text_edit, v=view):
+            # Ctrl 클릭이면 tooltip
+            if v.ctrl_click_debug(e):
+                return
+
+            # 일반 클릭은 기본 동작 유지
+            QPlainTextEdit.mousePressEvent(t, e)
+
+        view.text_edit.mousePressEvent = mouse_press_handler
 
         # 더블 클릭 이벤트 연결
         view.text_edit.mouseDoubleClickEvent = (
