@@ -901,6 +901,17 @@ def is_problem_line(line: str, key: str, path: str = None, app=None) -> bool:
         # 17자리 숫자인지 확인
         if not (last_part.isdigit() and len(last_part) == 13):
             return True  # 숫자 아니거나 길이 다르면 실패
+        
+    elif key == "name":
+        # ':' 이후 value 추출
+        value = value_part.strip()
+
+        # 공백 제거
+        value = value.rstrip()
+
+        # "~기"로 끝나는지 검사
+        if not value.endswith("기"):
+            return True
 
     elif key == "prompt":
         # 손 포함 여부 검사 (멀티라인 전체 기준)
