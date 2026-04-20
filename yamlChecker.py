@@ -642,7 +642,7 @@ class SearchOptionsDialog(QDialog):
         depth_label = QLabel("경로 표시 깊이")
 
         self.depth_spin = QSpinBox()
-        self.depth_spin.setMinimum(1)
+        self.depth_spin.setMinimum(3)
         self.depth_spin.setMaximum(10)
         self.depth_spin.setValue(init_options.get("depth", 3))
 
@@ -693,6 +693,28 @@ class SearchOptionsDialog(QDialog):
 
         layout.addLayout(regex_layout)
 
+
+        # -----------------------------
+        # Timestamp 범위 옵션
+        # -----------------------------
+        ts_layout = QHBoxLayout()
+
+        ts_label = QLabel("Timestamp 허용 범위(분)")
+
+        self.ts_range_spin = QSpinBox()
+        self.ts_range_spin.setMinimum(1)
+        self.ts_range_spin.setMaximum(60)  # 최대 10시간 정도
+        self.ts_range_spin.setValue(
+            init_options.get("timestamp_range_ms", 3600000) // 60000
+        )
+
+        ts_layout.addWidget(ts_label)
+        ts_layout.addStretch()
+        ts_layout.addWidget(self.ts_range_spin)
+
+        layout.addLayout(ts_layout)
+
+
         # -----------------------------
         # 버튼
         # -----------------------------
@@ -719,7 +741,8 @@ class SearchOptionsDialog(QDialog):
         return {
             "depth": self.depth_spin.value(),
             "hide_filename": self.hide_file_checkbox.isChecked(),
-            "use_regex": self.regex_checkbox.isChecked()
+            "use_regex": self.regex_checkbox.isChecked(),
+            "timestamp_range_ms": self.ts_range_spin.value() * 60000
         }
 
     # -----------------------------
@@ -739,7 +762,7 @@ class SearchOptionsDialog(QDialog):
 # ==================================================
 # 문제 라인 검사 함수
 # ==================================================
-def is_problem_line(line: str, key: str, path: str = None) -> bool:
+def is_problem_line(line: str, key: str, path: str = None, app=None) -> bool:
     """
     @return True: 문제 있는 라인
     @return False: 정상 라인
@@ -845,6 +868,12 @@ def is_problem_line(line: str, key: str, path: str = None) -> bool:
                     # """
                     # )
 
+                    # 타임 스탬프 허용범위 get
+                    max_range = 3600000
+
+                    if app:
+                        max_range = app.last_search_options.get("timestamp_range_ms", 3600000)
+
                     # ---------------------------
                     # 범위 기반 검증
                     # ---------------------------
@@ -853,7 +882,7 @@ def is_problem_line(line: str, key: str, path: str = None) -> bool:
                         return True
 
                     # 너무 미래면 오류 (1시간 이상)
-                    if ts > expected + 3600000:
+                    if ts > expected + max_range:
                         return True
 
             except:
@@ -1108,7 +1137,7 @@ class ResultHighlighter(QSyntaxHighlighter):
         # path 추출
         path_part = text[:first_space] if first_space > 0 else None
 
-        if is_problem_line(content, self.current_key, path_part):
+        if is_problem_line(content, self.current_key, path_part, self.app):
             self.setFormat(
                 first_space + 1 if first_space > 0 else 0,
                 len(content),
@@ -1152,7 +1181,8 @@ class App(QWidget):
         self.last_search_options = {
             "depth": 3,
             "hide_filename": True,
-            "use_regex": False
+            "use_regex": False,
+            "timestamp_range_ms": 3600000
         }
 
         self.load_options()
